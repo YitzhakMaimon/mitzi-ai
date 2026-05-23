@@ -1,0 +1,12 @@
+version: '3.8'
+
+services:
+  web-app:
+    build: .
+    container_name: mitzie_rag_app
+    ports:
+      - "5000:5000"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data

@@ -13,13 +13,14 @@
             min-height: 100vh; 
             display: flex; 
             flex-direction: column;
-            /* החזרת העיצוב המקור המלא - מתיחה מלאה על כל פני העמוד */
+            /* Full-page stretched background design layout */
             background-image: linear-gradient(rgba(249, 250, 251, 0.85), rgba(249, 250, 251, 0.85)), url('/static/background.jpg');
             background-size: cover;
             background-position: center;
             background-attachment: fixed;
             background-repeat: no-repeat;
         }
+        /* Utility class to instantly hide UI elements */
         .hidden { display: none !important; }
         header { background: rgba(255, 255, 255, 0.95); padding: 18px 25px; border-bottom: 1px solid #e5e7eb; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
         .header-container { max-width: 800px; margin: 0 auto; display: flex; justify-content: flex-start; align-items: center; }
@@ -36,6 +37,7 @@
         button:hover { background: #1d4ed8; }
         button:disabled { background: #9ca3af; cursor: not-allowed; }
         
+        /* CSS loading spinner animation styling */
         .loading-box { display: none; text-align: center; padding: 30px; background: rgba(255, 255, 255, 0.95); border: 1px solid #e5e7eb; border-radius: 12px; margin-bottom: 24px; }
         .spinner { border: 3px solid rgba(0, 0, 0, 0.1); width: 28px; height: 28px; border-radius: 50%; border-left-color: #2563eb; animation: spin 0.8s linear infinite; margin: 0 auto 12px auto; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
@@ -64,6 +66,7 @@
             <div class="desc">שאל שאלה בנושא זכויות, תגמולים, שיקום או נהלים, ומיצי תסרוק את מסמכי המקור הרשמיים כדי לספק לך תשובה מדויקת ומבוססת.</div>
             
             <div class="input-group">
+                <!-- Trigger query execution when pressing the Enter key -->
                 <input 
                     type="text" 
                     id="user-question" 
@@ -97,6 +100,7 @@
     </main>
 
     <script>
+        // Orchestrate full web-client application interaction cycle
         async function sendQuery() {
             const questionInput = document.getElementById('user-question');
             const submitBtn = document.getElementById('submit-btn');
@@ -108,17 +112,20 @@
 
             const question = questionInput.value.trim();
 
+            // Validate that the input is not blank
             if (!question) {
                 showError("נא להזין שאלה כדי שמיצי תוכל לעזור לך.");
                 return;
             }
 
+            // Update UI visibility toggles prior to backend execution
             errorBox.style.display = 'none';
             resultsArea.style.display = 'none';
             loadingIndicator.style.display = 'block';
             submitBtn.disabled = true;
 
             try {
+                // Post prompt text payload to the Flask endpoint
                 const response = await fetch('/ask', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -131,8 +138,10 @@
                     throw new Error(data.error || "אירעה שגיאה בעיבוד הנתונים.");
                 }
 
+                // Render the synthesized answer string
                 modelAnswer.innerText = data.answer;
 
+                // Dynamically build individual reference document visual badges
                 sourcesList.innerHTML = "";
                 if (data.sources && data.sources.length > 0) {
                     data.sources.forEach((source, index) => {
@@ -150,6 +159,7 @@
             } catch (err) {
                 showError(err.message);
             } finally {
+                // Reset interaction controls regardless of success status
                 loadingIndicator.style.display = 'none';
                 submitBtn.disabled = false;
             }
@@ -158,9 +168,6 @@
         function showError(message) {
             const errorBox = document.getElementById('error-box');
             const errorMessage = document.getElementById('error-message');
-            const loadingIndicator = document.getElementById('loading-indicator');
-            
-            loadingIndicator.style.display = 'none';
             errorMessage.innerText = message;
             errorBox.style.display = 'block';
         }

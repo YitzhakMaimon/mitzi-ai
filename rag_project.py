@@ -9,15 +9,15 @@ from google import genai
 from google.genai import types
 from huggingface_hub import InferenceClient
 from nltk.tokenize import sent_tokenize
-
+from dotenv import load_dotenv
+load_dotenv()
 
 # ==========================================================
 # HARD-CODED TOKENS
 # ==========================================================
 
-GEMINI_API_KEY = ""
-HF_TOKEN = ""
-
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+HF_TOKEN = os.environ.get("HF_TOKEN")
 
 # ==========================================================
 # CONFIGURATION
@@ -41,7 +41,6 @@ TOP_K = 5
 # Later you can try 4 or 8.
 BATCH_SIZE = 4
 
-
 # ==========================================================
 # CLIENTS
 # ==========================================================
@@ -53,7 +52,6 @@ hf_client = InferenceClient(
     api_key=HF_TOKEN
 )
 
-
 # ==========================================================
 # NLTK SETUP
 # ==========================================================
@@ -61,7 +59,6 @@ hf_client = InferenceClient(
 def setup_nltk():
     nltk.download("punkt", quiet=True)
     nltk.download("punkt_tab", quiet=True)
-
 
 # ==========================================================
 # LOAD DOCUMENTS
@@ -85,25 +82,25 @@ def load_documents(folder=DATA_FOLDER):
             with open(file_path, "r", encoding="utf-8") as file:
                 text = file.read()
 
-            # פיצול הקובץ לפי שורות / פסקאות
+            # Splitting the file into paragraphs
             paragraphs = text.split("\n")
             current_category = ""
 
             for paragraph in paragraphs:
                 paragraph = paragraph.strip()
                 
-                # התעלמות משורות ריקות או מכותרת הקובץ הראשית
+                # Ignoring empty lines or the main file header
                 if not paragraph or paragraph.startswith("==="):
                     continue
                     
-                # זיהוי ושמירה של הקטגוריה הנוכחית כהקשר (Context)
+                # Identifying and saving the current category as context
                 if paragraph.startswith("[CATEGORY:"):
                     current_category = paragraph
                     continue
                     
-                # שמירת התוכן יחד עם הקטגוריה שלו (רק אם יש בו תוכן משמעותי)
+                # Saving the content along with its category, if it contains significant content
                 if len(paragraph) > 20:
-                    # אם נמצאה קטגוריה, נצמיד אותה לתחילת הצ'אנק
+                    # If a category is found, append it to the beginning of the chunk
                     if current_category:
                         full_chunk = f"{current_category}\n{paragraph}"
                     else:
@@ -119,48 +116,47 @@ def load_documents(folder=DATA_FOLDER):
     print(f"Loaded {len(chunks)} text chunks.")
     return chunks
 
-
-
 # ==========================================================
 # HUGGING FACE CLOUD EMBEDDINGS
 # ==========================================================
+
 def normalize_embedding_output(raw_output, expected_count):
     """
-    גרסה חסינה ואוניברסלית: מבטיחה המרה חלקה ל-Numpy דו-ממדי (expected_count x dimension).
-    מונעת קריסות שרת לחלוטין כאשר השאילתה מוגשת בעברית או מכילה ריבוי טוקנים.
+    Robust and universal version: ensures smooth conversion to 2D Numpy array (expected_count x dimension).
+    Completely prevents server crashes when the query is submitted in Hebrew or contains multiple tokens.
     """
+    
     arr = np.array(raw_output, dtype="float32")
 
-    # מקרה 1: וקטור בודד שטוח (למשל עבור השאלה של המשתמש)
+    # Case 1: Single flat vector (e.g., for the user's question)
     if arr.ndim == 1:
         arr = arr.reshape(1, -1)
 
-    # מקרה 2: מערך דו-ממדי
+    # Case 2: 2D array
     elif arr.ndim == 2:
         if arr.shape[0] == expected_count:
             pass
         elif expected_count == 1:
             arr = arr.mean(axis=0, keepdims=True)
         else:
-            # במקום לזרוק שגיאה, נתאים ידנית למבנה הנדרש במקרה של סטייה בענן
+            # Instead of throwing an error, manually adjust to the required structure in case of a cloud anomaly
             arr = arr.reshape(expected_count, -1)
 
-    # מקרה 3: מערך תלת-ממדי (נפוץ מאוד בשאילתות בעברית בגלל פיצול טוקנים בענן)
+    # Case 3: 3D array (very common in Hebrew queries due to token splitting in the cloud)
     elif arr.ndim == 3:
         arr = arr.mean(axis=1)
         if expected_count == 1 and arr.ndim == 2 and arr.shape[0] > 1:
             arr = arr.mean(axis=0, keepdims=True)
 
     else:
-        # גיבוי למניעת קריסת השרת
+        # Backup to prevent server crash
         arr = arr.reshape(expected_count, -1)
 
-    # בדיקת בטיחות סופית להבטחת תאימות מלאה ל-FAISS
+    # Final safety check to ensure full compatibility with FAISS
     if arr.shape[0] != expected_count:
         arr = arr.reshape(expected_count, -1)
 
     return arr.astype("float32")
-
 
 def hf_feature_extraction_with_retries(inputs, expected_count, max_retries=5):
     """
@@ -171,13 +167,16 @@ def hf_feature_extraction_with_retries(inputs, expected_count, max_retries=5):
     - list of strings
     """
 
+    # Retry loop for API connection resilience
     for attempt in range(1, max_retries + 1):
         try:
+            # Request embedding vector(s) from Hugging Face Cloud API
             result = hf_client.feature_extraction(
                 inputs,
                 model=HF_EMBEDDING_MODEL
             )
 
+            # Standardize output format to ensure compatibility with FAISS database
             embeddings = normalize_embedding_output(
                 raw_output=result,
                 expected_count=expected_count
@@ -186,16 +185,18 @@ def hf_feature_extraction_with_retries(inputs, expected_count, max_retries=5):
             return embeddings
 
         except Exception as e:
+            # Log error details for the current failed attempt
             print(f"Hugging Face embedding failed. Attempt {attempt}/{max_retries}")
             print("Error:", e)
 
+            # If all attempts fail, re-raise the exception to trigger error handling
             if attempt == max_retries:
                 raise
 
+            # Wait with exponential backoff before the next attempt
             wait_seconds = attempt * 3
             print(f"Retrying in {wait_seconds} seconds...")
             time.sleep(wait_seconds)
-
 
 def embed_texts_with_huggingface(texts, batch_size=BATCH_SIZE):
     """
@@ -203,14 +204,17 @@ def embed_texts_with_huggingface(texts, batch_size=BATCH_SIZE):
     """
 
     all_embeddings = []
+    # Calculate the total number of batches rounded up
     total_batches = (len(texts) + batch_size - 1) // batch_size
 
+    # Iterate through the documents using the specified batch size
     for start in range(0, len(texts), batch_size):
         batch = texts[start:start + batch_size]
 
         current_batch = start // batch_size + 1
         print(f"Embedding batch {current_batch}/{total_batches}...")
 
+        # Process the current batch with automatic retry logic
         embeddings = hf_feature_extraction_with_retries(
             inputs=batch,
             expected_count=len(batch)
@@ -218,6 +222,7 @@ def embed_texts_with_huggingface(texts, batch_size=BATCH_SIZE):
 
         all_embeddings.append(embeddings)
 
+    # Vertically stack all batch arrays into a single final matrix
     final_embeddings = np.vstack(all_embeddings).astype("float32")
     print("Final embeddings:", final_embeddings)
     print(f"Created document embeddings. Shape: {final_embeddings.shape}")
@@ -241,7 +246,6 @@ def embed_query_with_huggingface(query):
 # ==========================================================
 # FAISS VECTOR SEARCH
 # ==========================================================
-
 def create_faiss_index(embeddings):
     """
     Creates FAISS index.
@@ -250,10 +254,13 @@ def create_faiss_index(embeddings):
     This behaves like cosine similarity.
     """
 
+    # Normalize vectors to unit length for inner product (cosine similarity)
     faiss.normalize_L2(embeddings)
 
+    # Get the embedding vector dimension size
     dimension = embeddings.shape[1]
 
+    # Initialize a flat Inner Product index and add the vectors
     index = faiss.IndexFlatIP(dimension)
     index.add(embeddings)
 
@@ -261,16 +268,18 @@ def create_faiss_index(embeddings):
 
     return index
 
-
 def retrieve(query, index, chunks, k=TOP_K):
     """
     Embeds the user question with Hugging Face and searches FAISS.
     """
 
+    # Generate the vector representation for the user's query
     query_embedding = embed_query_with_huggingface(query)
 
+    # Normalize query vector for cosine similarity matching
     faiss.normalize_L2(query_embedding)
 
+    # Search the vector database for the top K closest matches
     scores, indexes = index.search(query_embedding, k)
 
     print("\nFAISS scores:", scores)
@@ -278,6 +287,7 @@ def retrieve(query, index, chunks, k=TOP_K):
 
     retrieved_chunks = []
 
+    # Map the retrieved structural vector indexes back to text chunks
     for idx in indexes[0]:
         if idx != -1:
             retrieved_chunks.append(chunks[idx])
@@ -331,18 +341,18 @@ Answer:
 
 
 # ==========================================================
-# FKASK APP
+# FLASK APP
 # ==========================================================
 
-# משתנים גלובליים חדשים כדי לשמור את המאגר בזיכרון של השרת
+# Global variables to store the knowledge base in the server's memory
 GLOBAL_CHUNKS = []
 GLOBAL_INDEX = None
 
 @app.before_request
 def initialize_rag_system():
     """
-    רץ פעם אחת אוטומטית כשהשרת עולה.
-    טוען את המסמכים ובונה את אינדקס ה-FAISS בזיכרון.
+    Runs once automatically when the server starts.
+    Loads documents and builds the FAISS index in memory.
     """
     global GLOBAL_CHUNKS, GLOBAL_INDEX
     if GLOBAL_INDEX is None:
@@ -356,28 +366,28 @@ def initialize_rag_system():
 
 @app.route("/")
 def home():
-    """מציג למשתמש את ממשק האינטרנט (דף ה-HTML)"""
+    """Displays the web interface (the HTML page) to the user"""
     return render_template("index.html")
 
 
 @app.route("/ask", methods=["POST"])
 def ask():
     """
-    נקודת הקצה (API) שמקבלת את השאלה מהדפדפן,
-    מפעילה את ה-retrieve ואת ה-LLM, ומחזירה תשובה.
+    The API endpoint that receives the question from the browser,
+    triggers the retrieval and the LLM, and returns the response.
     """
     global GLOBAL_CHUNKS, GLOBAL_INDEX
     
-    # קבלת השאלה שנשלחה מהאתר
+    # Extract the question sent from the website
     data = request.get_json() or {}
     question = data.get("question", "").strip()
 
-    # טיפול במקרה קצה: שאילתה ריקה
+    # Handle edge case: empty query
     if not question:
         return jsonify({"error": "אנא הקלד שאלה תקינה."}), 400
 
     try:
-        # 1. שליפת פסקאות מ-FAISS (הפונקציה המקורית שלך)
+        # 1. Retrieve paragraphs from FAISS (your original function)
         top_chunks = retrieve(
             query=question,
             index=GLOBAL_INDEX,
@@ -387,10 +397,10 @@ def ask():
         
         context = "\n".join(top_chunks)
         
-        # 2. יצירת תשובה מעוגנת בנתונים מ-Gemini (הפונקציה המקורית שלך)
+        # 2. Generate a data-grounded response from Gemini (your original function)
         answer = ask_gemini(context, question)
         
-        # החזרת המידע כ-JSON לדפדפן
+        # Return the information as JSON to the browser
         return jsonify({
             "answer": answer,
             "sources": top_chunks
